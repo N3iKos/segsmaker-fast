@@ -101,7 +101,7 @@ def getPython():
 
         'Forge-Neo': {
             'v': '3.13.12',
-            'url': 'https://huggingface.co/gutris1/webui/resolve/main/env/KC-FN-Python3-13-12-Torch2100-cu130.tar.lz4'
+            'url': 'https://huggingface.co/gutris1/webui/resolve/main/env/KC-FN-Python31312-Torch2120-cu130.tar.lz4'
         }
     }
 
@@ -133,11 +133,28 @@ def getPython():
         print("✅ Pre-requisite packages (aria2, pv, lz4) are already installed. Skipping apt-get install!")
 
     aria = f'aria2c --console-log-level=error --stderr=true -c -x16 -s16 -k1M -j5 {cfg["url"]} -o {fn}'
-    p = subprocess.Popen(shlex.split(aria), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    p.wait()
+    aria_cmd = shlex.split(aria)
+    
+    # Inject optional HuggingFace token if provided and netloc is HuggingFace
+    if 'huggingface.co' in cfg['url'] and hf_read_token and hf_read_token.strip().startswith('hf_'):
+        aria_cmd.append(f'--header=Authorization: Bearer {hf_read_token.strip()}')
+        
+    p = subprocess.Popen(aria_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout, stderr = p.communicate()
+
+    if p.returncode != 0:
+        print(f"\n{ERROR}: Failed to download Python Portable environment.")
+        print(f"URL: {cfg['url']}")
+        if stderr:
+            print(f"Details:\n{stderr.strip()}")
+        sys.exit(1)
 
     SyS(f'pv {fn} | lz4 -d | tar -xf -')
-    Path(f'/{fn}').unlink()
+    
+    # Safely remove downloaded lz4 package
+    archive_path = Path(f'/{fn}')
+    if archive_path.exists():
+        archive_path.unlink()
 
     sys.path.insert(0, PKG)
     if BIN not in iRON['PATH']:
@@ -563,7 +580,7 @@ def notebook_scripts():
         (MRK, f'wget -qO {MRK} https://github.com/N3iKos/segsmaker-fast/raw/main/script/marking.py')
     ]
 
-    [SyS(y) for x, y in z if not Path(x).exists()]
+    [SyS(y) for x, y in z]
 
     j = {
         'ENVNAME': ENVNAME,
