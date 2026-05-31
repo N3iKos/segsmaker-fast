@@ -635,7 +635,10 @@ def pull(line):
     cmd1 += f' {repo}'
     subs(shlex.split(cmd1), cwd=str(fp), **opts)
 
-    repofold = fp / Path(repo).name.rstrip('.git')
+    repo_name = Path(repo).name
+    if repo_name.lower().endswith('.git'):
+        repo_name = repo_name[:-4]
+    repofold = fp / repo_name
 
     cmd2 = f'git sparse-checkout set --no-cone {tarfold}'
     subs(shlex.split(cmd2), cwd=str(repofold), **opts)
