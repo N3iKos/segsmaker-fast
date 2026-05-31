@@ -329,7 +329,8 @@ def get_url(url, fn):
 
     elif 'huggingface.co' in url:
         url = url.split('?')[0]
-        h = {'User-Agent': 'Mozilla/5.0', **({'Authorization': f'Bearer {TOBRUT}'} if TOBRUT else {})}
+        is_hf_token = TOBRUT and TOBRUT.strip().startswith('hf_')
+        h = {'User-Agent': 'Mozilla/5.0', **({'Authorization': f'Bearer {TOBRUT.strip()}'} if is_hf_token else {})}
         ext = ['.safetensors', '.pt', '.pth']
         j, versionId = None, None
 
@@ -449,7 +450,8 @@ def ariari(url, fp, fn, on_progress=None):
     ]
 
     if f'{civitai}/api/download/models/' in url and TOKET: cmd.append(f"--header=Authorization: Bearer {TOKET}")
-    if TOBRUT and 'huggingface.co' in url: cmd.append(f'--header=Authorization: Bearer {TOBRUT}')
+    is_hf_token = TOBRUT and TOBRUT.strip().startswith('hf_')
+    if is_hf_token and 'huggingface.co' in url: cmd.append(f'--header=Authorization: Bearer {TOBRUT.strip()}')
 
     if fn: cmd += ['-o', fn]
 
