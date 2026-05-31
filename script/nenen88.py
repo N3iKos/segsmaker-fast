@@ -301,18 +301,22 @@ def get_url(url, fn):
     civitai = get_civdom(url)
 
     def maybe_add_token(u):
-        # Add token only for non-Civitai hosts and when TOKET is set.
+        # We should NEVER append Civitai token (TOKET) to HuggingFace, GitHub, or other non-Civitai hosts!
+        # Doing so causes "Authorization failed" (401/403) errors.
         try:
             parsed = urlparse(u)
             host = parsed.netloc.lower()
         except:
             return u
 
-        # If host is Civitai or Backblaze storage, do NOT modify the signed URL.
-        if any(d in host for d in CIVITAI) or host.startswith('b2.'):
+        # Only append to Civitai hosts if it is actually Civitai and doesn't already have it
+        if not any(d in host for d in CIVITAI):
             return u
 
         if not TOKET:
+            return u
+
+        if 'token=' in u:
             return u
 
         if '?type=' in u:
