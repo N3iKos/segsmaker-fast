@@ -6,7 +6,6 @@ from IPython.display import display, HTML
 from urllib.parse import urlparse
 from IPython import get_ipython
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import subprocess
 import threading
@@ -36,115 +35,6 @@ iRON = os.environ
 KAGGLE = 'KAGGLE_DATA_PROXY_TOKEN' in iRON
 
 CIVITAI = ['civitai.com', 'civitai.red']
-
-
-PRINT_LOCK = threading.Lock()
-
-
-def safe_print(*args, **kwargs):
-    """Serialize output from parallel download workers."""
-    with PRINT_LOCK:
-        print(*args, **kwargs)
-        sys.stdout.flush()
-
-
-def normalize_download_items(items):
-    """Return non-empty download command lines while preserving path/name tokens."""
-    normalized = []
-    for item in items or []:
-        if item is None:
-            continue
-        line = str(item).strip()
-        if line:
-            normalized.append(line)
-    return normalized
-
-
-def clamp_workers(max_workers, total_items=None):
-    """Keep parallel workers in a Colab-friendly range."""
-    try:
-        workers = int(max_workers)
-    except (TypeError, ValueError):
-        workers = 3
-    workers = max(1, min(workers, 10))
-    if total_items:
-        workers = min(workers, max(1, int(total_items)))
-    return workers
-
-
-def download_item_label(item):
-    """Create a short, token-safe label for completion output."""
-    parts = str(item).split()
-    if not parts:
-        return 'empty'
-    for token in reversed(parts[1:]):
-        if '/' not in token and token.strip():
-            return token.strip()
-    parsed = urlparse(parts[0])
-    name = Path(parsed.path).name
-    if name:
-        return name
-    return parsed.netloc or parts[0].split('?')[0]
-
-
-def download_many(items, parallel=False, max_workers=3, label='Parallel'):
-    """Download many command lines using the existing single-item resolver.
-
-    Blank items are skipped. Sequential mode preserves the old ordering. Parallel
-    mode runs several independent download workers and prints serialized status
-    lines so Colab users can see which slots completed or failed.
-    """
-    queue = normalize_download_items(items)
-    total = len(queue)
-    if total == 0:
-        safe_print('  no download URLs provided; skipped')
-        return []
-
-    workers = clamp_workers(max_workers, total)
-    results = []
-
-    def run_one(index, item):
-        name = download_item_label(item)
-        try:
-            download(item)
-            return {'index': index, 'item': item, 'name': name, 'ok': True, 'error': ''}
-        except Exception as exc:
-            return {'index': index, 'item': item, 'name': name, 'ok': False, 'error': str(exc)}
-
-    if not parallel or workers == 1 or total == 1:
-        for index, item in enumerate(queue, 1):
-            result = run_one(index, item)
-            results.append(result)
-            mark = '✓' if result['ok'] else '✗'
-            safe_print(f"  [{index}/{total}] {mark} {result['name']}")
-            if result['error']:
-                safe_print(f"      error: {result['error']}")
-        return results
-
-    safe_print(f"【#{label} 0MiB/0MiB(0%) DL:0MiB/s ETA:-- workers:{workers}】")
-    completed = 0
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(run_one, index, item): (index, item) for index, item in enumerate(queue, 1)}
-        for future in as_completed(futures):
-            completed += 1
-            result = future.result()
-            results.append(result)
-            mark = '✓' if result['ok'] else '✗'
-            safe_print(f"  [{completed}/{total}] {mark} {result['name']}")
-            if result['error']:
-                safe_print(f"      error: {result['error']}")
-
-    results.sort(key=lambda row: row['index'])
-    ok_count = sum(1 for row in results if row['ok'])
-    safe_print(f"【#{label} complete {ok_count}/{total} files workers:{workers}】")
-    return results
-
-
-@register_line_magic
-def downloads(line):
-    """Download newline- or semicolon-separated items from a line magic."""
-    raw_items = [part.strip() for part in re.split(r'[;\n]+', line or '')]
-    return download_many(raw_items, parallel=True, max_workers=3)
 
 @register_line_magic
 def say(line):

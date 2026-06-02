@@ -134,7 +134,6 @@ def webui_launch(launch_args, skip_comfyui_check, ngrok_token=None, zrok_token=N
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='nothing to read here')
     parser.add_argument('--skip-comfyui-check', action='store_true', help='Skip checking custom node dependencies for ComfyUI')
-    parser.add_argument('--skip-widget', action='store_true', help='Accepted by notebook launcher; reserved for widget startup compatibility')
     parser.add_argument('--N', type=str, help='NGROK tunnel (pass a token or do nothing)', default=None)
     parser.add_argument('--Z', type=str, help='ZROK tunnel (pass a token or do nothing)', default=None)
 
