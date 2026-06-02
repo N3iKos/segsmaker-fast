@@ -5,16 +5,15 @@ from IPython.core.magic import register_line_magic
 from IPython.display import display, HTML, clear_output
 from urllib.parse import urlparse
 from IPython import get_ipython
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tqdm import tqdm
+import concurrent.futures
+from threading import Lock
 import subprocess
-import threading
 import requests
 import zipfile
 import shlex
 import json
-import time
 import sys
 import re
 import os
@@ -32,47 +31,6 @@ RESET = '\033[0m'
 
 CD = os.chdir
 SyS = get_ipython().system
-
-# ─── Aria2c progress helpers ─────────────────────────────────────────────────
-_TO_BYTES = {'B':1,'KiB':1024,'MiB':1024**2,'GiB':1024**3,
-             'KB':1000,'MB':1000**2,'GB':1000**3}
-
-def _parse_aria2_stats(raw):
-    """Extract numeric stats from a raw aria2c progress line."""
-    s = {'pct':0,'done_b':0.0,'total_b':0.0,'speed_b':0.0,'eta_s':0}
-    m = re.search(r'([\d.]+)(\w+)/([\d.]+)(\w+)\((\d+)%\)', raw)
-    if m:
-        s['done_b']  = float(m.group(1)) * _TO_BYTES.get(m.group(2), 1)
-        s['total_b'] = float(m.group(3)) * _TO_BYTES.get(m.group(4), 1)
-        s['pct']     = int(m.group(5))
-    m = re.search(r'DL:([\d.]+)(\w+)', raw)
-    if m: s['speed_b'] = float(m.group(1)) * _TO_BYTES.get(m.group(2), 1)
-    m = re.search(r'ETA:(\d+)(s|m|h)', raw)
-    if m: s['eta_s'] = int(m.group(1)) * {'s':1,'m':60,'h':3600}[m.group(2)]
-    return s
-
-def _fmt_size(b):
-    for u in ('B','KiB','MiB','GiB'):
-        if b < 1024 or u == 'GiB': return f'{b:.1f}{u}'
-        b /= 1024
-
-def _fmt_eta(s):
-    if s <= 0: return '?'
-    return f'{s}s' if s < 60 else f'{s//60}m{s%60:02d}s'
-
-def _fmt_progress(raw):
-    """Apply ANSI formatting to a raw aria2c progress line."""
-    p = raw
-    p = re.sub(r'\[', MAGENTA + '【' + RESET, p)
-    p = re.sub(r'\]', MAGENTA + '】' + RESET, p)
-    p = re.sub(r'(#)(\w+)', f'{CYAN}\\1{RESET}{GREEN}\\2{RESET}', p)
-    p = re.sub(r'(\d+(\.\d+)?)(\w+)(/)(\d+(\.\d+)?)(\w+)',
-               f'\\1{PURPLE}\\3{RESET}{MAGENTA}\\4{RESET}\\5{PURPLE}\\7{RESET}', p)
-    p = re.sub(r'(\()(\d+%)(\))', f'{MAGENTA}\\1{RESET}\\2{MAGENTA}\\3{RESET}', p)
-    p = re.sub(r'(CN)(:)(\d+)', f'{CYAN}\\1{RESET}\\2{ORANGE}\\3{RESET}', p)
-    p = re.sub(r'(DL)(:)([\d.]+)(\w+)', f'{CYAN}\\1{RESET}\\2\\3{PURPLE}\\4{RESET}', p)
-    p = re.sub(r'(ETA)(:)(\d+\w+)', f'{CYAN}\\1{RESET}\\2{YELLOW}\\3{RESET}', p)
-    return p
 iRON = os.environ
 
 KAGGLE = 'KAGGLE_DATA_PROXY_TOKEN' in iRON
@@ -301,22 +259,18 @@ def get_url(url, fn):
     civitai = get_civdom(url)
 
     def maybe_add_token(u):
-        # We should NEVER append Civitai token (TOKET) to HuggingFace, GitHub, or other non-Civitai hosts!
-        # Doing so causes "Authorization failed" (401/403) errors.
+        # Add token only for non-Civitai hosts and when TOKET is set.
         try:
             parsed = urlparse(u)
             host = parsed.netloc.lower()
         except:
             return u
 
-        # Only append to Civitai hosts if it is actually Civitai and doesn't already have it
-        if not any(d in host for d in CIVITAI):
+        # If host is Civitai or Backblaze storage, do NOT modify the signed URL.
+        if any(d in host for d in CIVITAI) or host.startswith('b2.'):
             return u
 
         if not TOKET:
-            return u
-
-        if 'token=' in u:
             return u
 
         if '?type=' in u:
@@ -329,8 +283,7 @@ def get_url(url, fn):
 
     elif 'huggingface.co' in url:
         url = url.split('?')[0]
-        is_hf_token = TOBRUT and TOBRUT.strip().startswith('hf_')
-        h = {'User-Agent': 'Mozilla/5.0', **({'Authorization': f'Bearer {TOBRUT.strip()}'} if is_hf_token else {})}
+        h = {'User-Agent': 'Mozilla/5.0', **({'Authorization': f'Bearer {TOBRUT}'} if TOBRUT else {})}
         ext = ['.safetensors', '.pt', '.pth']
         j, versionId = None, None
 
@@ -412,7 +365,7 @@ def get_url(url, fn):
 
     return maybe_add_token(url), None, None
 
-def ariari(url, fp, fn, on_progress=None):
+def ariari(url, fp, fn):
     url, j, versionId = get_url(url, fn)
     if not url: return
 
@@ -434,24 +387,15 @@ def ariari(url, fp, fn, on_progress=None):
             print(f"  Preflight failed: {e}")
             print("  Falling back to aria2 with Authorization header.")
 
-    # Optimized aria2c flags for cloud network:
-    # -x16 -s16: 16 connections per file, 16 splits — maximizes bandwidth on cloud links
-    # -k1M: 1MB chunk size — optimal for large model files
-    # -j5: up to 5 parallel jobs per aria2c instance
-    # --min-split-size=1M: ensures splits are meaningful
-    # --auto-file-renaming=false: prevents duplicate-name collisions when running parallel
     cmd = [
         'aria2c',
         f"--header=User-Agent: {civitai_headers()['User-Agent'] if f'{civitai}' in url else 'Mozilla/5.0'}",
         '--allow-overwrite=true', '--console-log-level=error', '--stderr=true',
-        '--auto-file-renaming=false', '--min-split-size=1M',
-        f'--dir={str(fp)}',
         '-c', '-x16', '-s16', '-k1M', '-j5'
     ]
 
     if f'{civitai}/api/download/models/' in url and TOKET: cmd.append(f"--header=Authorization: Bearer {TOKET}")
-    is_hf_token = TOBRUT and TOBRUT.strip().startswith('hf_')
-    if is_hf_token and 'huggingface.co' in url: cmd.append(f'--header=Authorization: Bearer {TOBRUT.strip()}')
+    if TOBRUT and 'huggingface.co' in url: cmd.append(f'--header=Authorization: Bearer {TOBRUT}')
 
     if fn: cmd += ['-o', fn]
 
@@ -479,13 +423,20 @@ def ariari(url, fp, fn, on_progress=None):
                         error_line.append(prog)
 
                     if re.match(r'\[#\w{6}\s.*\]', prog):
-                        raw_prog = prog  # keep raw for stats / callback
-                        if on_progress:
-                            on_progress(raw_prog)
-                        else:
-                            formatted = _fmt_progress(raw_prog)
-                            print(f"\r{' '*300}\r {formatted}", end='')
+                        prog = re.sub(r'\[', MAGENTA + '【' + RESET, prog)
+                        prog = re.sub(r'\]', MAGENTA + '】' + RESET, prog)
+                        prog = re.sub(r'(#)(\w+)', f'{CYAN}\\1{RESET}{GREEN}\\2{RESET}', prog)
+                        prog = re.sub(r'(\d+(\.\d+)?)(\w+)(/)(\d+(\.\d+)?)(\w+)', f"\\1{PURPLE}\\3{RESET}{MAGENTA}\\4{RESET}\\5{PURPLE}\\7{RESET}", prog)
+                        prog = re.sub(r'(\()(\d+%)(\))', f'{MAGENTA}\\1{RESET}\\2{MAGENTA}\\3{RESET}', prog)
+                        prog = re.sub(r'(CN)(:)(\d+)', f"{CYAN}\\1{RESET}\\2{ORANGE}\\3{RESET}", prog)
+                        prog = re.sub(r'(DL)(:)(\d+(\.\d+)?)(\w+)', f"{CYAN}\\1{RESET}\\2\\3{PURPLE}\\5{RESET}", prog)
+                        prog = re.sub(r'(ETA)(:)(\d+\w+)', f"{CYAN}\\1{RESET}\\2{YELLOW}\\3{RESET}", prog)
+
+                        lines = prog.splitlines()
+                        for line in lines:
+                            print(f"\r{' '*300}\r {line}", end='')
                             sys.stdout.flush()
+
                         break_line = True
                         break
 
@@ -493,7 +444,7 @@ def ariari(url, fp, fn, on_progress=None):
         error = error_code + error_line
         for lines in error: print(f'  {lines}')
 
-        if break_line and not on_progress: print()
+        break_line and print()
 
         stripe = aria2_output.find('======+====+===========')
         if stripe != -1:
@@ -641,10 +592,7 @@ def pull(line):
     cmd1 += f' {repo}'
     subs(shlex.split(cmd1), cwd=str(fp), **opts)
 
-    repo_name = Path(repo).name
-    if repo_name.lower().endswith('.git'):
-        repo_name = repo_name[:-4]
-    repofold = fp / repo_name
+    repofold = fp / Path(repo).name.rstrip('.git')
 
     cmd2 = f'git sparse-checkout set --no-cone {tarfold}'
     subs(shlex.split(cmd2), cwd=str(repofold), **opts)
@@ -666,140 +614,6 @@ def pull(line):
 
     cmd5 = f'rm -rf {str(repofold)}'
     subs(shlex.split(cmd5), cwd=str(fp), **opts)
-
-_print_lock = threading.Lock()
-
-def parallel_batch_download(items, max_workers=3):
-    """
-    Download multiple files in parallel with per-slot progress lines + aggregate summary.
-    Each download occupies its own line; a final '【#Parallel ...】' line shows combined stats.
-    """
-    if not items:
-        return {}
-
-    total  = len(items)
-    results = {}
-
-    # ── Shared progress state (written by workers, read by renderer) ──────────
-    _state_lock = threading.Lock()
-    _state = {}   # idx -> {'label': str, 'raw': str, 'done': bool, 'ok': bool}
-
-    def _set_state(idx, **kw):
-        with _state_lock:
-            if idx not in _state:
-                _state[idx] = {'label': '', 'raw': '', 'done': False, 'ok': True}
-            _state[idx].update(kw)
-
-    # ── Renderer ──────────────────────────────────────────────────────────────
-    _stop_render = threading.Event()
-
-    def _build_frame():
-        with _state_lock:
-            snap = {k: dict(v) for k, v in _state.items()}
-
-        lines_out = []
-        agg_speed = 0.0; agg_done = 0.0; agg_total = 0.0; agg_eta = 0; active = 0
-
-        for i in range(total):
-            slot  = snap.get(i, {})
-            label = slot.get('label', f'file {i+1}')
-            done  = slot.get('done', False)
-            ok    = slot.get('ok', True)
-            raw   = slot.get('raw', '')
-
-            if done:
-                icon = f'{GREEN}✓{RESET}' if ok else f'{RED}✗{RESET}'
-                lines_out.append(f'  [{i+1}/{total}] {icon} {label}')
-            elif raw:
-                lines_out.append(f' {_fmt_progress(raw)}')
-                st = _parse_aria2_stats(raw)
-                agg_speed += st['speed_b']; agg_done += st['done_b']
-                agg_total += st['total_b']; agg_eta = max(agg_eta, st['eta_s'])
-                active += 1
-            else:
-                lines_out.append(f'  [{i+1}/{total}] {YELLOW}⏳{RESET} {label} — starting...')
-
-        # Aggregate summary line
-        if active > 0:
-            pct  = int(100 * agg_done / agg_total) if agg_total else 0
-            spd  = _fmt_size(agg_speed) + '/s'
-            done_s  = _fmt_size(agg_done)
-            total_s = _fmt_size(agg_total)
-            eta  = _fmt_eta(agg_eta)
-            agg_line = (
-                f' {MAGENTA}【{RESET}'
-                f'{CYAN}#Parallel{RESET} '
-                f'{done_s}{MAGENTA}/{RESET}{total_s}'
-                f'{MAGENTA}({RESET}{pct}%{MAGENTA}){RESET} '
-                f'{CYAN}DL{RESET}:{PURPLE}{spd}{RESET} '
-                f'{CYAN}ETA{RESET}:{YELLOW}{eta}{RESET}'
-                f'{MAGENTA}】{RESET}'
-            )
-        else:
-            done_c = sum(1 for s in snap.values() if s.get('done'))
-            agg_line = f'  {CYAN}▶ {done_c}/{total} completed{RESET}'
-
-        lines_out.append(agg_line)
-        return '\n'.join(lines_out)
-
-    def _render_loop():
-        while not _stop_render.is_set():
-            frame = _build_frame()
-            clear_output(wait=True)
-            print(frame)
-            sys.stdout.flush()
-            _stop_render.wait(0.25)
-        # final frame
-        clear_output(wait=True)
-        print(_build_frame())
-        sys.stdout.flush()
-
-    renderer = threading.Thread(target=_render_loop, daemon=True, name='progress-renderer')
-    renderer.start()
-
-    # ── Workers ───────────────────────────────────────────────────────────────
-    def _worker(idx, url, fp, fn):
-        label = fn if fn else Path(urlparse(url).path).name or url
-        _set_state(idx, label=label)
-        try:
-            fp = Path(fp).expanduser()
-            fp.mkdir(parents=True, exist_ok=True)
-
-            def _on_progress(raw):
-                _set_state(idx, raw=raw)
-
-            CHG = any(domain in url for domain in [*CIVITAI, 'huggingface.co', 'github.com'])
-            if CHG:
-                ariari(url, fp, fn, on_progress=_on_progress)
-            elif 'drive.google.com' in url:
-                gdrown(url, fp, fn)
-            else:
-                cmd = (f"curl -#OJL '{url}'" if not fn else f"curl -#L '{url}' -o '{fn}'")
-                old_cwd = Path.cwd(); CD(fp)
-                curlly(cmd, fn or label)
-                CD(old_cwd)
-
-            _set_state(idx, done=True, ok=True, raw='')
-            return url, 'ok'
-        except Exception as e:
-            _set_state(idx, done=True, ok=False, raw='')
-            return url, 'error'
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(_worker, idx, url, fp, fn)
-                   for idx, (url, fp, fn) in enumerate(items)]
-        for f in as_completed(futures):
-            url, status = f.result()
-            results[url] = status
-
-    _stop_render.set()
-    renderer.join(timeout=2)
-
-    ok  = sum(1 for s in results.values() if s == 'ok')
-    err = sum(1 for s in results.values() if s == 'error')
-    print(f'\n{CYAN}▶ Batch complete — {GREEN}{ok} ok{RESET}, {RED}{err} error(s){RESET}\n')
-    return results
-
 
 @register_line_magic
 def tempe(line=''):
@@ -824,3 +638,258 @@ def tempe(line=''):
     ]
 
     for SUB in DIRS: Path(f'{TMP}/{SUB}').mkdir(parents=True, exist_ok=True)
+
+def parse_size(size_str):
+    match = re.match(r'^([\d\.]+)\s*([a-zA-Z]*)$', size_str.strip())
+    if not match:
+        return 0.0
+    val, unit = match.groups()
+    val = float(val)
+    unit = unit.lower()
+    if 'g' in unit:
+        return val * 1024 * 1024 * 1024
+    elif 'm' in unit:
+        return val * 1024 * 1024
+    elif 'k' in unit:
+        return val * 1024
+    return val
+
+def format_size(bytes_val):
+    if bytes_val >= 1024 * 1024 * 1024:
+        return f"{bytes_val / (1024 * 1024 * 1024):.1f}GiB"
+    elif bytes_val >= 1024 * 1024:
+        return f"{bytes_val / (1024 * 1024):.1f}MiB"
+    elif bytes_val >= 1024:
+        return f"{bytes_val / 1024:.1f}KiB"
+    return f"{bytes_val:.0f}B"
+
+def is_git_repo(url):
+    url_lower = url.lower().strip()
+    if url_lower.endswith('.git'):
+        return True
+    if 'github.com/' in url_lower and not any(x in url_lower for x in ['/resolve/', '/raw/', '/releases/download/', '/archive/']):
+        return True
+    return False
+
+def parallel_download(download_list, max_workers=3, parallel=True):
+    tasks = []
+    for idx, item in enumerate(download_list):
+        url = item[0].strip()
+        if not url:
+            continue
+        dest_dir = Path(item[1]).expanduser()
+        filename = item[2] if len(item) > 2 else None
+        
+        if not filename:
+            parts = url.split()
+            if len(parts) > 1:
+                url = parts[0]
+                filename = parts[1]
+                
+        tasks.append({
+            'index': idx + 1,
+            'url': url,
+            'dest_dir': dest_dir,
+            'filename': filename,
+            'status': 'Pending',
+            'progress_line': '',
+            'bytes_downloaded': 0.0,
+            'bytes_total': 0.0,
+            'speed_bytes': 0.0,
+            'eta_secs': 0.0
+        })
+        
+    total_tasks = len(tasks)
+    if total_tasks == 0:
+        print("No URLs to download.")
+        return
+
+    lock = Lock()
+    completed_lines = []
+    
+    def update_display():
+        with lock:
+            clear_output(wait=True)
+            for line in completed_lines:
+                print(line)
+            
+            active_list = [t for t in tasks if t['status'] == 'Downloading']
+            for t in active_list:
+                if t['progress_line']:
+                    print(t['progress_line'])
+            
+            if active_list:
+                sum_downloaded = sum(t['bytes_downloaded'] for t in active_list)
+                sum_total = sum(t['bytes_total'] for t in active_list)
+                sum_speed = sum(t['speed_bytes'] for t in active_list)
+                
+                percentage = int((sum_downloaded / sum_total) * 100) if sum_total > 0 else 0
+                eta_secs = int((sum_total - sum_downloaded) / sum_speed) if sum_speed > 0 else 0
+                
+                if eta_secs > 60:
+                    eta_str = f"{eta_secs // 60}m{eta_secs % 60}s"
+                else:
+                    eta_str = f"{eta_secs}s"
+                    
+                downloaded_str = format_size(sum_downloaded)
+                total_str = format_size(sum_total)
+                speed_str = f"{format_size(sum_speed)}/s"
+                
+                colored_summary = f"\033[38;5;135m【\033[0m\033[36m#Parallel\033[0m \033[38;5;35m{downloaded_str}\033[0m/\033[38;5;135m{total_str}\033[0m(\033[35m{percentage}%\033[0m) DL:\033[38;5;69m{speed_str}\033[0m ETA:\033[33m{eta_str}\033[0m\033[38;5;135m】\033[0m"
+                print(colored_summary)
+            sys.stdout.flush()
+
+    def run_single_download(task):
+        url = task['url']
+        dest_dir = task['dest_dir']
+        filename = task['filename']
+        task_idx = task['index']
+        
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        cwd = Path.cwd()
+        
+        resolved_url, j, versionId = get_url(url, filename)
+        if not resolved_url:
+            with lock:
+                task['status'] = 'Failed'
+                completed_lines.append(f"  [{task_idx}/{total_tasks}] ❌ Failed to resolve URL: {url}")
+            return
+            
+        civitai_dom = get_civdom(resolved_url)
+        is_civitai = bool(civitai_dom)
+        is_gdrive = 'drive.google.com' in resolved_url
+        is_git = is_git_repo(resolved_url)
+        
+        if not filename:
+            if is_civitai:
+                filename = None
+            else:
+                filename = Path(urlparse(resolved_url).path).name
+                if not filename or filename in ['resolve', 'raw']:
+                    filename = None
+        
+        identifier = versionId or filename or Path(urlparse(resolved_url).path).name or "model"
+        
+        try:
+            with lock:
+                task['status'] = 'Downloading'
+            
+            if is_gdrive:
+                cmd = f"gdown --fuzzy {resolved_url}"
+                if filename:
+                    cmd += f" -O {filename}"
+                cmd += " --folder" if 'drive/folders' in resolved_url else ""
+                
+                p = subprocess.Popen(shlex.split(cmd), cwd=str(dest_dir), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                while p.poll() is None:
+                    time.sleep(0.5)
+                p.wait()
+                
+            elif is_git:
+                cmd = f"git clone {resolved_url}"
+                if filename:
+                    cmd += f" {filename}"
+                p = subprocess.Popen(shlex.split(cmd), cwd=str(dest_dir), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                while p.poll() is None:
+                    with lock:
+                        task['progress_line'] = f"\033[36m【Cloning {resolved_url}...】\033[0m"
+                    update_display()
+                    time.sleep(0.5)
+                p.wait()
+                
+            else:
+                cmd = [
+                    'aria2c',
+                    f"--header=User-Agent: {civitai_headers()['User-Agent'] if is_civitai else 'Mozilla/5.0'}",
+                    '--allow-overwrite=true', '--console-log-level=error', '--stderr=true',
+                    '-c', '-x16', '-s16', '-k1M', '-j5'
+                ]
+                
+                if is_civitai and TOKET:
+                    cmd.append(f"--header=Authorization: Bearer {TOKET}")
+                if TOBRUT and 'huggingface.co' in resolved_url:
+                    cmd.append(f'--header=Authorization: Bearer {TOBRUT}')
+                    
+                if filename:
+                    cmd += ['-o', filename]
+                cmd += ['--dir', str(dest_dir)]
+                cmd.append(resolved_url)
+                
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                
+                while True:
+                    line = p.stderr.readline()
+                    if line == '' and p.poll() is not None:
+                        break
+                    if line:
+                        for prog in line.splitlines():
+                            if re.match(r'\[#\w{6}\s.*\]', prog):
+                                parsed = parse_aria_line(prog)
+                                
+                                colored_prog = prog
+                                colored_prog = re.sub(r'\[', f'\033[38;5;135m【\033[0m', colored_prog)
+                                colored_prog = re.sub(r'\]', f'\033[38;5;135m】\033[0m', colored_prog)
+                                colored_prog = re.sub(r'(#)(\w+)', f'\033[36m\\1\033[0m\033[32m\\2\033[0m', colored_prog)
+                                colored_prog = re.sub(r'(\d+(\.\d+)?)(\w+)(/)(\d+(\.\d+)?)(\w+)', f"\\1\033[38;5;135m\\3\033[0m\033[35m\\4\033[0m\\5\033[38;5;135m\\7\033[0m", colored_prog)
+                                colored_prog = re.sub(r'(\()(\d+%)(\))', f'\033[35m\\1\033[0m\\2\033[35m\\3\033[0m', colored_prog)
+                                colored_prog = re.sub(r'(CN)(:)(\d+)', f"\033[36m\\1\033[0m:\033[38;5;208m\\3\033[0m", colored_prog)
+                                colored_prog = re.sub(r'(DL)(:)(\d+(\.\d+)?)(\w+)', f"\033[36m\\1\033[0m:\\3\033[38;5;135m\\5\033[0m", colored_prog)
+                                colored_prog = re.sub(r'(ETA)(:)(\d+\w+)', f"\033[36m\\1\033[0m:\033[33m\\3\033[0m", colored_prog)
+                                
+                                with lock:
+                                    task['progress_line'] = colored_prog
+                                    if parsed:
+                                        task['bytes_downloaded'] = parsed['downloaded']
+                                        task['bytes_total'] = parsed['total']
+                                        task['speed_bytes'] = parsed['speed']
+                                        task['eta_secs'] = parsed['eta']
+                                update_display()
+                p.wait()
+                
+                if is_civitai and j:
+                    try:
+                        actual_fn = filename
+                        if not actual_fn:
+                            v_info = get_civitai(j, versionId)
+                            if v_info:
+                                actual_fn = v_info.get('files', [{}])[0].get('name')
+                        if actual_fn:
+                            civitai_infotags(j, dest_dir, actual_fn, versionId)
+                            civitai_preview(j, dest_dir, actual_fn, versionId)
+                    except:
+                        pass
+            with lock:
+                task['status'] = 'Completed'
+                completed_lines.append(f"  [\033[32m{task_idx}\033[0m/\033[32m{total_tasks}\033[0m] \033[32m✓\033[0m {identifier}")
+            update_display()
+        except Exception as e:
+            with lock:
+                task['status'] = 'Failed'
+                completed_lines.append(f"  [{task_idx}/{total_tasks}] ❌ Failed: {e}")
+            update_display()
+
+    def parse_aria_line(line):
+        try:
+            match = re.search(r'\[#\w{6}\s+([\d\.]+)([a-zA-Z]+)/([\d\.]+)([a-zA-Z]+)\((\d+)%\).*?DL:([\d\.]+)([a-zA-Z]+)(?:\s+ETA:(\w+))?\]', line)
+            if not match:
+                return None
+            dl_val, dl_unit, tot_val, tot_unit, pct, sp_val, sp_unit, eta_str = match.groups()
+            downloaded = parse_size(f"{dl_val}{dl_unit}")
+            total = parse_size(f"{tot_val}{tot_unit}")
+            speed = parse_size(f"{sp_val}{sp_unit}")
+            eta = 0
+            if eta_str:
+                eta_match = re.match(r'(?:(\d+)m)?(?:(\d+)s)?', eta_str)
+                if eta_match:
+                    m, s = eta_match.groups()
+                    eta = (int(m or 0) * 60) + int(s or 0)
+            return {'downloaded': downloaded, 'total': total, 'speed': speed, 'eta': eta}
+        except:
+            return None
+
+    if parallel and max_workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            executor.map(run_single_download, tasks)
+    else:
+        for task in tasks:
+            run_single_download(task)

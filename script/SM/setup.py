@@ -18,7 +18,7 @@ import shlex
 import json
 import os
 
-from nenen88 import pull, say, download, clone, tempe
+from nenen88 import pull, say, download, clone, tempe, parallel_download
 
 REPO = {
     'A1111': 'https://github.com/gutris1/A1111',
@@ -45,16 +45,16 @@ iRON = os.environ
 
 def SM_Script(WEBUI):
     return [
-        f'https://github.com/gutris1/segsmaker/raw/main/script/SM/venv.py {WEBUI}',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/SM/Launcher.py {WEBUI}',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/SM/segsmaker.py {WEBUI}'
+        f'https://github.com/n3iKos/segsmaker-fast/raw/main/script/SM/venv.py {WEBUI}',
+        f'https://github.com/n3iKos/segsmaker-fast/raw/main/script/SM/Launcher.py {WEBUI}',
+        f'https://github.com/n3iKos/segsmaker-fast/raw/main/script/SM/segsmaker.py {WEBUI}'
     ]
 
 def CN_Script(WEBUI):
     return [
-        f'https://github.com/gutris1/segsmaker/raw/main/script/controlnet.py {WEBUI}/asd',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/cn15.py {WEBUI}/asd',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/cnxl.py {WEBUI}/asd',
+        f'https://github.com/n3iKos/segsmaker-fast/raw/main/script/controlnet.py {WEBUI}/asd',
+        f'https://github.com/n3iKos/segsmaker-fast/raw/main/script/cn15.py {WEBUI}/asd',
+        f'https://github.com/n3iKos/segsmaker-fast/raw/main/script/cnxl.py {WEBUI}/asd',
     ]
 
 def Load_CSS():
@@ -237,7 +237,7 @@ def webui_req(U, W, M):
     CD(W)
 
     if U != 'SwarmUI':
-        pull(f'https://github.com/gutris1/segsmaker {U.lower()} {W}')
+        pull(f'https://github.com/n3iKos/segsmaker-fast {U.lower()} {W}')
     else:
         M.mkdir(parents=True, exist_ok=True)
         for sub in ['Stable-Diffusion', 'Lora', 'Embeddings', 'VAE', 'upscale_models']:
@@ -267,19 +267,35 @@ def webui_req(U, W, M):
     ]
 
     line = scripts + upscalers
-    for item in line: download(item)
+    downloads = []
+    for item in line:
+        parts = item.split()
+        url = parts[0]
+        dest = parts[1]
+        filename = parts[2] if len(parts) > 2 else None
+        downloads.append((url, dest, filename))
+    parallel_download(downloads, max_workers=4, parallel=True)
 
     if U not in ['SwarmUI', 'ComfyUI']:
         e = 'jpg' if U == 'Forge-Classic' else 'png'
         SyS(f'rm -f {W}/html/card-no-preview.{e}')
 
-        for ass in [
+        asses = [
             f'https://huggingface.co/gutris1/webui/resolve/main/misc/card-no-preview.png {W}/html card-no-preview.{e}',
-            f'https://github.com/gutris1/segsmaker/raw/main/config/NoCrypt_miku.json {W}/tmp/gradio_themes',
-            f'https://github.com/gutris1/segsmaker/raw/main/config/user.css {W} user.css'
-        ]: download(ass)
-
-        if U != 'Forge': download(f'https://github.com/gutris1/segsmaker/raw/main/config/config.json {W} config.json')
+            f'https://github.com/n3iKos/segsmaker-fast/raw/main/config/NoCrypt_miku.json {W}/tmp/gradio_themes',
+            f'https://github.com/n3iKos/segsmaker-fast/raw/main/config/user.css {W} user.css'
+        ]
+        if U not in ['Forge', 'Forge-Neo']:
+            asses.append(f'https://github.com/n3iKos/segsmaker-fast/raw/main/config/config.json {W} config.json')
+        
+        downloads = []
+        for item in asses:
+            parts = item.split()
+            url = parts[0]
+            dest = parts[1]
+            filename = parts[2] if len(parts) == 3 else None
+            downloads.append((url, dest, filename))
+        parallel_download(downloads, max_workers=3, parallel=True)
 
 def WebUIExtensions(U, W, M):
     EXT = W / 'custom_nodes' if U == 'ComfyUI' else W / 'extensions'
@@ -290,10 +306,17 @@ def WebUIExtensions(U, W, M):
         clone(str(W / 'asd/custom_nodes.txt'))
         print()
 
-        for faces in [
+        faces_list = [
             f'https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth {M}/facerestore_models',
             f'https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth {M}/facerestore_models'
-        ]: download(faces)
+        ]
+        downloads = []
+        for item in faces_list:
+            parts = item.split()
+            url = parts[0]
+            dest = parts[1]
+            downloads.append((url, dest))
+        parallel_download(downloads, max_workers=2, parallel=True)
 
     else:
         say('<br><b>【{red} Installing Extensions{d} 】{red}</b>')
@@ -312,7 +335,14 @@ def installing_webui(U, W):
         f'https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/resolve/main/sdxl.vae.safetensors {V} sdxl_vae.safetensors'
     ]
 
-    for i in extras: download(i)
+    downloads = []
+    for item in extras:
+        parts = item.split()
+        url = parts[0]
+        dest = parts[1]
+        filename = parts[2] if len(parts) == 3 else None
+        downloads.append((url, dest, filename))
+    parallel_download(downloads, max_workers=2, parallel=True)
     SyS(f"unzip -qo {W / 'embeddingsXL.zip'} -d {E} && rm {W / 'embeddingsXL.zip'}")
 
     if U != 'SwarmUI': WebUIExtensions(U, W, M)
@@ -452,9 +482,9 @@ hbox2.add_class('hbox2')
 
 def Segsmaker_Setup_Widgets():
     for cmd in [
-        f'curl -sLo {CSS} https://github.com/gutris1/segsmaker/raw/main/script/SM/setup.css',
-        f'curl -sLo {IMG} https://github.com/gutris1/segsmaker/raw/main/script/loading.png',
-        f'curl -sLo {MRK} https://github.com/gutris1/segsmaker/raw/main/script/marking.py'
+        f'curl -sLo {CSS} https://github.com/n3iKos/segsmaker-fast/raw/main/script/SM/setup.css',
+        f'curl -sLo {IMG} https://github.com/n3iKos/segsmaker-fast/raw/main/script/loading.png',
+        f'curl -sLo {MRK} https://github.com/n3iKos/segsmaker-fast/raw/main/script/marking.py'
     ]: SyS(cmd)
 
     Load_CSS()
