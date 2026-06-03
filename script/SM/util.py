@@ -390,7 +390,7 @@ def change_key(line):
         display(HTML(f'<style>{Path(css).read_text()}</style>'))
 
     def key_inject(civitai_key, hf_token):
-        SyS(f'curl -sLo {nenen} https://github.com/n3iKos/segsmaker-fast/raw/main/script/nenen88.py')
+        SyS(f'curl -sLo {nenen} https://github.com/gutris1/segsmaker/raw/main/script/nenen88.py')
 
         p = Path(nenen)
         v = p.read_text()
