@@ -304,7 +304,7 @@ def webui_req(U, W, M):
     CD(W)
 
     if U != 'SwarmUI':
-        pull(f'https://github.com/N3iKos/segsmaker-fast {U.lower()} {W}')
+        pull(f'https://github.com/gutris1/segsmaker-fast {U.lower()} {W}')
     else:
         M.mkdir(parents=True, exist_ok=True)
         for sub in ['Stable-Diffusion', 'Lora', 'Embeddings', 'VAE', 'upscale_models']:
@@ -319,10 +319,10 @@ def webui_req(U, W, M):
     install_tunnel()
 
     scripts = [
-        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/controlnet.py {W}/asd',
-        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/cn15.py {W}/asd',
-        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/cnxl.py {W}/asd',
-        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/KC/segsmaker.py {W}'
+        f'https://github.com/gutris1/segsmaker-fast/raw/main/script/controlnet.py {W}/asd',
+        f'https://github.com/gutris1/segsmaker-fast/raw/main/script/cn15.py {W}/asd',
+        f'https://github.com/gutris1/segsmaker-fast/raw/main/script/cnxl.py {W}/asd',
+        f'https://github.com/gutris1/segsmaker-fast/raw/main/script/KC/segsmaker.py {W}'
     ]
 
     u = M / 'upscale_models' if U in ['ComfyUI', 'SwarmUI'] else M / 'ESRGAN'
@@ -348,18 +348,18 @@ def webui_req(U, W, M):
 
         for ass in [
             f'https://huggingface.co/gutris1/webui/resolve/main/misc/card-no-preview.png {W}/html card-no-preview.{e}',
-            f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/NoCrypt_miku.json {W}/tmp/gradio_themes',
-            f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/user.css {W} user.css'
+            f'https://github.com/gutris1/segsmaker-fast/raw/main/config/NoCrypt_miku.json {W}/tmp/gradio_themes',
+            f'https://github.com/gutris1/segsmaker-fast/raw/main/config/user.css {W} user.css'
         ]: download(ass)
 
-        if U not in ['Forge', 'Forge-Neo']: download(f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/config.json {W} config.json')
+        if U not in ['Forge', 'Forge-Neo']: download(f'https://github.com/gutris1/segsmaker-fast/raw/main/config/config.json {W} config.json')
 
 def webui_extension(U, W, M):
     EXT = W / 'custom_nodes' if U == 'ComfyUI' else W / 'extensions'
     CD(EXT)
 
     if U == 'ComfyUI':
-        say('<br><b>Ã£â‚¬Â{red} Installing Custom Nodes{d} Ã£â‚¬â€˜{red}</b>')
+        say('<br><b>【{red} Installing Custom Nodes{d} 】{red}</b>')
         clone(str(W / 'asd/custom_nodes.txt'))
         print()
 
@@ -369,7 +369,7 @@ def webui_extension(U, W, M):
         ]: download(faces)
 
     else:
-        say('<br><b>Ã£â‚¬Â{red} Installing Extensions{d} Ã£â‚¬â€˜{red}</b>')
+        say('<br><b>【{red} Installing Extensions{d} 】{red}</b>')
         clone(str(W / 'asd/extension.txt'))
         if ENVNAME == 'Kaggle': clone('https://github.com/gutris1/sd-image-encryption')
 
@@ -395,14 +395,14 @@ def webui_selection(ui):
         output.clear_output(wait=True)
 
         if ui in REPO: (WEBUI, repo) = (HOME / ui, REPO[ui])
-        say(f'<b>Ã£â‚¬Â{{red}} Installing {WEBUI.name}{{d}} Ã£â‚¬â€˜{{red}}</b>')
+        say(f'<b>【{{red}} Installing {WEBUI.name}{{d}} 】{{red}}</b>')
         clone(repo)
 
         webui_installation(ui, WEBUI)
 
         with loading:
             loading.clear_output(wait=True)
-            say('<br><b>Ã£â‚¬Â{red} Done{d} Ã£â‚¬â€˜{red}</b>')
+            say('<br><b>【{red} Done{d} 】{red}</b>')
             tempe()
             CD(HOME)
 
@@ -442,11 +442,11 @@ def webui_installer():
 
 def notebook_scripts():
     z = [
-        (STR / '00-startup.py', f'wget -qO {STR}/00-startup.py https://github.com/N3iKos/segsmaker-fast/raw/main/script/KC/00-startup.py'),
-        (nenen, f'wget -qO {nenen} https://github.com/N3iKos/segsmaker-fast/raw/main/script/nenen88.py'),
-        (melon, f'wget -qO {melon} https://github.com/N3iKos/segsmaker-fast/raw/main/script/melon00.py'),
-        (STR / 'cupang.py', f'wget -qO {STR}/cupang.py https://github.com/N3iKos/segsmaker-fast/raw/main/script/cupang.py'),
-        (MRK, f'wget -qO {MRK} https://github.com/N3iKos/segsmaker-fast/raw/main/script/marking.py')
+        (STR / '00-startup.py', f'wget -qO {STR}/00-startup.py https://github.com/gutris1/segsmaker-fast/raw/main/script/KC/00-startup.py'),
+        (nenen, f'wget -qO {nenen} https://github.com/gutris1/segsmaker-fast/raw/main/script/nenen88.py'),
+        (melon, f'wget -qO {melon} https://github.com/gutris1/segsmaker-fast/raw/main/script/melon00.py'),
+        (STR / 'cupang.py', f'wget -qO {STR}/cupang.py https://github.com/gutris1/segsmaker-fast/raw/main/script/cupang.py'),
+        (MRK, f'wget -qO {MRK} https://github.com/gutris1/segsmaker-fast/raw/main/script/marking.py')
     ]
 
     [SyS(y) for x, y in z if not Path(x).exists()]
@@ -479,9 +479,9 @@ RESET = '\033[0m'
 RED = '\033[31m'
 PURPLE = '\033[38;5;135m'
 ORANGE = '\033[38;5;208m'
-ARROW = f'{ORANGE}Ã¢â€“Â¶{RESET}'
+ARROW = f'{ORANGE}▶{RESET}'
 ERROR = f'{PURPLE}[{RESET}{RED}ERROR{RESET}{PURPLE}]{RESET}'
-IMG = 'https://github.com/N3iKos/segsmaker-fast/raw/main/script/loading.png'
+IMG = 'https://github.com/gutris1/segsmaker-fast/raw/main/script/loading.png'
 
 HOME = Path(ENVHOME)
 TMP = Path(ENVBASE) / 'temp'
@@ -514,4 +514,3 @@ notebook_scripts()
 
 from nenen88 import clone, say, download, tempe, pull
 webui_installer()
-

@@ -5,7 +5,7 @@ Description: Run multiple tunnel in Python
 
 License:
 This code is permitted directly by the author, cupang-afk, for its usage in 
-the repository https://github.com/N3iKos/segsmaker-fast, authored by gutris1. 
+the repository https://github.com/gutris1/segsmaker-fast, authored by gutris1. 
 Any other usage must comply with the terms of the original license provided 
 in the author's repository.
 
@@ -534,7 +534,7 @@ class Tunnel:
             with self.urls_lock:
                 for url, note, name in self.urls:
                     if url not in URLs:
-                        Tunnels.append(f'\nÃ°Å¸Å¸Â¢ {name} {ORG}:{RST} {url}')
+                        Tunnels.append(f'\n🟢 {name} {ORG}:{RST} {url}')
                         URLs.add(url)
 
             if len(self.urls) == len(self.tunnel_list): break
@@ -551,6 +551,6 @@ class Tunnel:
         error_tunnel = set(Name.split(', ')) - working_tunnel
 
         if error_tunnel and not self.stop_event.is_set():
-            log.warning(f"Ã¢Å¡Â Ã¯Â¸Â {YLW}Timeout while getting tunnel URLs for{RST} {', '.join(error_tunnel)}")
+            log.warning(f"⚠️ {YLW}Timeout while getting tunnel URLs for{RST} {', '.join(error_tunnel)}")
 
         self.printed.set()

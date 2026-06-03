@@ -1012,7 +1012,7 @@ def change_key(line):
 
     def key_inject(civitai_key, hf_token):
         if os.path.exists('/content'):
-            SyS(f'curl -sLo {nenen} https://github.com/gutris1/segsmaker/raw/main/script/nenen88.py')
+            SyS(f'curl -sLo {nenen} https://github.com/gutris1/segsmaker-fast/raw/main/script/nenen88.py')
         p = Path(nenen)
         if p.exists():
             v = p.read_text()
