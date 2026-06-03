@@ -271,7 +271,7 @@ def zipping(line, cell):
             total=len(all_files),
             desc='zipping : ',
             bar_format='{desc}[{bar:26}] [{n_fmt}/{total_fmt}]',
-            ascii='▷▶',
+            ascii='Ã¢â€“Â·Ã¢â€“Â¶',
             file=sys.stdout) as pbar:
 
             with zipfile.ZipFile(
@@ -390,7 +390,7 @@ def change_key(line):
         display(HTML(f'<style>{Path(css).read_text()}</style>'))
 
     def key_inject(civitai_key, hf_token):
-        SyS(f'curl -sLo {nenen} https://github.com/gutris1/segsmaker/raw/main/script/nenen88.py')
+        SyS(f'curl -sLo {nenen} https://github.com/N3iKos/segsmaker-fast/raw/main/script/nenen88.py')
 
         p = Path(nenen)
         v = p.read_text()

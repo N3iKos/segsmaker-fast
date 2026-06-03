@@ -45,16 +45,16 @@ iRON = os.environ
 
 def SM_Script(WEBUI):
     return [
-        f'https://github.com/gutris1/segsmaker/raw/main/script/SM/venv.py {WEBUI}',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/SM/Launcher.py {WEBUI}',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/SM/segsmaker.py {WEBUI}'
+        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/SM/venv.py {WEBUI}',
+        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/SM/Launcher.py {WEBUI}',
+        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/SM/segsmaker.py {WEBUI}'
     ]
 
 def CN_Script(WEBUI):
     return [
-        f'https://github.com/gutris1/segsmaker/raw/main/script/controlnet.py {WEBUI}/asd',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/cn15.py {WEBUI}/asd',
-        f'https://github.com/gutris1/segsmaker/raw/main/script/cnxl.py {WEBUI}/asd',
+        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/controlnet.py {WEBUI}/asd',
+        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/cn15.py {WEBUI}/asd',
+        f'https://github.com/N3iKos/segsmaker-fast/raw/main/script/cnxl.py {WEBUI}/asd',
     ]
 
 def Load_CSS():
@@ -237,7 +237,7 @@ def webui_req(U, W, M):
     CD(W)
 
     if U != 'SwarmUI':
-        pull(f'https://github.com/gutris1/segsmaker {U.lower()} {W}')
+        pull(f'https://github.com/N3iKos/segsmaker-fast {U.lower()} {W}')
     else:
         M.mkdir(parents=True, exist_ok=True)
         for sub in ['Stable-Diffusion', 'Lora', 'Embeddings', 'VAE', 'upscale_models']:
@@ -275,18 +275,18 @@ def webui_req(U, W, M):
 
         for ass in [
             f'https://huggingface.co/gutris1/webui/resolve/main/misc/card-no-preview.png {W}/html card-no-preview.{e}',
-            f'https://github.com/gutris1/segsmaker/raw/main/config/NoCrypt_miku.json {W}/tmp/gradio_themes',
-            f'https://github.com/gutris1/segsmaker/raw/main/config/user.css {W} user.css'
+            f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/NoCrypt_miku.json {W}/tmp/gradio_themes',
+            f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/user.css {W} user.css'
         ]: download(ass)
 
-        if U != 'Forge': download(f'https://github.com/gutris1/segsmaker/raw/main/config/config.json {W} config.json')
+        if U != 'Forge': download(f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/config.json {W} config.json')
 
 def WebUIExtensions(U, W, M):
     EXT = W / 'custom_nodes' if U == 'ComfyUI' else W / 'extensions'
     CD(EXT)
 
     if U == 'ComfyUI':
-        say('<br><b>【{red} Installing Custom Nodes{d} 】{red}</b>')
+        say('<br><b>Ã£â‚¬Â{red} Installing Custom Nodes{d} Ã£â‚¬â€˜{red}</b>')
         clone(str(W / 'asd/custom_nodes.txt'))
         print()
 
@@ -296,7 +296,7 @@ def WebUIExtensions(U, W, M):
         ]: download(faces)
 
     else:
-        say('<br><b>【{red} Installing Extensions{d} 】{red}</b>')
+        say('<br><b>Ã£â‚¬Â{red} Installing Extensions{d} Ã£â‚¬â€˜{red}</b>')
         clone(str(W / 'asd/extension.txt'))
 
 def installing_webui(U, W):
@@ -326,7 +326,7 @@ def webui_install(ui):
             WEBUI = HOME / ui
             repo = REPO[ui]
 
-        say(f"<b>【{{red}} Installing {ui.replace('-', '')}{{d}} 】{{red}}</b>")
+        say(f"<b>Ã£â‚¬Â{{red}} Installing {ui.replace('-', '')}{{d}} Ã£â‚¬â€˜{{red}}</b>")
         clone(repo)
 
         marking(SRC, MARKED, ui)
@@ -339,7 +339,7 @@ def webui_install(ui):
             get_ipython().run_line_magic('run', str(WEBUI / 'venv.py'))
 
             loading.clear_output(wait=True)
-            say('<b>【{red} Done{d} 】{red}</b>')
+            say('<b>Ã£â‚¬Â{red} Done{d} Ã£â‚¬â€˜{red}</b>')
             CD(HOME)
 
 def facetrainer(ui):
@@ -356,7 +356,7 @@ def facetrainer(ui):
             WEBUI = HOME / ui
             repo, vnv = SDTFusion[ui]
 
-        say(f"<b>【{{red}} Installing {ui.replace('-', '')}{{d}} 】{{red}}</b>")
+        say(f"<b>Ã£â‚¬Â{{red}} Installing {ui.replace('-', '')}{{d}} Ã£â‚¬â€˜{{red}}</b>")
         clone(repo)
 
         marking(SRC, MARKED, ui)
@@ -381,7 +381,7 @@ def facetrainer(ui):
             get_ipython().run_line_magic('run', str(WEBUI / 'venv.py'))
 
             loading.clear_output(wait=True)
-            say('<b>【{red} Done{d} 】{red}</b>')
+            say('<b>Ã£â‚¬Â{red} Done{d} Ã£â‚¬â€˜{red}</b>')
             CD(HOME)
 
 def oppai(ui):
@@ -452,9 +452,9 @@ hbox2.add_class('hbox2')
 
 def Segsmaker_Setup_Widgets():
     for cmd in [
-        f'curl -sLo {CSS} https://github.com/gutris1/segsmaker/raw/main/script/SM/setup.css',
-        f'curl -sLo {IMG} https://github.com/gutris1/segsmaker/raw/main/script/loading.png',
-        f'curl -sLo {MRK} https://github.com/gutris1/segsmaker/raw/main/script/marking.py'
+        f'curl -sLo {CSS} https://github.com/N3iKos/segsmaker-fast/raw/main/script/SM/setup.css',
+        f'curl -sLo {IMG} https://github.com/N3iKos/segsmaker-fast/raw/main/script/loading.png',
+        f'curl -sLo {MRK} https://github.com/N3iKos/segsmaker-fast/raw/main/script/marking.py'
     ]: SyS(cmd)
 
     Load_CSS()
@@ -462,3 +462,4 @@ def Segsmaker_Setup_Widgets():
 
 CD(HOME)
 Segsmaker_Setup_Widgets()
+
