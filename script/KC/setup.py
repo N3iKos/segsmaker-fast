@@ -41,33 +41,37 @@ def getArgs():
     parser.add_argument('--webui', required=True, help='available webui: A1111, Forge, ReForge, ReForge-old, Forge-Classic, Forge-Neo, ComfyUI, SwarmUI')
     parser.add_argument('--civitai_key', required=True, help='your CivitAI API key')
     parser.add_argument('--hf_read_token', default=None, help='your Huggingface READ Token (optional)')
+    parser.add_argument('--parallel_download', default='true', help='enable parallel installer downloads: true or false')
+    parser.add_argument('--max_workers', type=int, default=5, help='maximum installer download workers')
 
     args, unknown = parser.parse_known_args()
 
     arg1 = args.webui.lower()
     arg2 = args.civitai_key.strip()
     arg3 = args.hf_read_token.strip() if args.hf_read_token else ''
+    arg4 = str(args.parallel_download).lower() in {'1', 'true', 'yes', 'on'}
+    arg5 = max(1, int(args.max_workers or 1))
 
     if not any(arg1 == option.lower() for option in WEBUI_LIST):
         print(f'{ERROR}: invalid webui option: "{args.webui}"')
         print(f'Available webui options: {", ".join(WEBUI_LIST)}')
-        return None, None, None
+        return None, None, None, None, None
 
     if not arg2:
         print(f'{ERROR}: CivitAI API key is missing.')
-        return None, None, None
+        return None, None, None, None, None
     if re.search(r'\s+', arg2):
         print(f'{ERROR}: CivitAI API key contains spaces "{arg2}" - not allowed.')
-        return None, None, None
+        return None, None, None, None, None
     if len(arg2) < 32:
         print(f'{ERROR}: CivitAI API key must be at least 32 characters long.')
-        return None, None, None
+        return None, None, None, None, None
 
     if not arg3: arg3 = ''
     if re.search(r'\s+', arg3): arg3 = ''
 
     selected_ui = next(option for option in WEBUI_LIST if arg1 == option.lower())
-    return selected_ui, arg2, arg3
+    return selected_ui, arg2, arg3, arg4, arg5
 
 def getPython():
     global PYV
@@ -340,17 +344,18 @@ def webui_req(U, W, M):
     ]
 
     line = scripts + upscalers
-    for item in line: download(item)
+    download_many(line, parallel=INSTALLER_PARALLEL, max_workers=INSTALLER_MAX_WORKERS)
 
     if U not in ['SwarmUI', 'ComfyUI']:
         e = 'jpg' if U in ['Forge-Classic', 'Forge-Neo'] else 'png'
         SyS(f'rm -f {W}/html/card-no-preview.{e}')
 
-        for ass in [
+        assets = [
             f'https://huggingface.co/gutris1/webui/resolve/main/misc/card-no-preview.png {W}/html card-no-preview.{e}',
             f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/NoCrypt_miku.json {W}/tmp/gradio_themes',
             f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/user.css {W} user.css'
-        ]: download(ass)
+        ]
+        download_many(assets, parallel=INSTALLER_PARALLEL, max_workers=INSTALLER_MAX_WORKERS)
 
         if U not in ['Forge', 'Forge-Neo']: download(f'https://github.com/N3iKos/segsmaker-fast/raw/main/config/config.json {W} config.json')
 
@@ -385,7 +390,7 @@ def webui_installation(U, W):
         f'https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/resolve/main/sdxl.vae.safetensors {V} sdxl_vae.safetensors'
     ]
 
-    for i in extras: download(i)
+    download_many(extras, parallel=INSTALLER_PARALLEL, max_workers=INSTALLER_MAX_WORKERS)
     SyS(f"unzip -qo {W / 'embeddingsXL.zip'} -d {E} && rm {W / 'embeddingsXL.zip'}")
 
     if U != 'SwarmUI': webui_extension(U, W, M)
@@ -504,7 +509,7 @@ SRC.mkdir(parents=True, exist_ok=True)
 output = widgets.Output()
 loading = widgets.Output()
 
-webui, civitai_key, hf_read_token = getArgs()
+webui, civitai_key, hf_read_token, INSTALLER_PARALLEL, INSTALLER_MAX_WORKERS = getArgs()
 if civitai_key is None: sys.exit()
 
 display(output, loading)
@@ -512,5 +517,5 @@ with loading: display(Image(url=IMG))
 with output: PY.exists() or getPython()
 notebook_scripts()
 
-from nenen88 import clone, say, download, tempe, pull
+from nenen88 import clone, say, download, tempe, pull, download_many
 webui_installer()
