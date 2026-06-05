@@ -12,12 +12,14 @@ import subprocess
 import threading
 import requests
 import zipfile
+import tempfile
 import shlex
 import json
 import sys
 import re
 import os
 import io
+import time
 
 MAGENTA = '\033[35m'
 RED = '\033[31m'
@@ -191,6 +193,230 @@ def _safe_link_or_copy(src, dst):
         import shutil
         shutil.copy2(src, dst)
 
+def _is_fast_download(url):
+    return any(host in url for host in CIVITAI + ['huggingface.co', 'github.com'])
+
+def _aria_headers(url):
+    civitai = get_civdom(url)
+    headers = {'User-Agent': (civitai_headers()['User-Agent'] if civitai else 'Mozilla/5.0')}
+    if TOBRUT and 'huggingface.co' in url:
+        headers['Authorization'] = f'Bearer {TOBRUT}'
+    if TOKET and civitai and f'{civitai}/api/download/models/' in url:
+        headers['Authorization'] = f'Bearer {TOKET}'
+    return headers
+
+def _resolve_authorized_url(url):
+    civitai = get_civdom(url)
+    if not (TOKET and civitai and f'{civitai}/api/download/models/' in url):
+        return url
+
+    try:
+        r = requests.get(url, headers=_aria_headers(url), allow_redirects=True, stream=True, timeout=30)
+        if r.url and r.url != url:
+            url = r.url
+        r.close()
+    except Exception as e:
+        print(f'  Preflight failed: {e}')
+        print('  Falling back to aria2 with Authorization header.')
+    return url
+
+def _prepare_download_item(line, default_dir=None, load_from_drive=False, drive_dir=None):
+    url, fp, fn = _download_target(line, default_dir)
+    if not url:
+        return None
+
+    fp = Path(fp or default_dir or Path.cwd()).expanduser()
+    drive_fp = Path(drive_dir).expanduser() if drive_dir else None
+    resolved_url, j, versionId, resolved_fn = get_url(url, fn)
+    if not resolved_url:
+        return None
+
+    name = resolved_fn or fn or Path(urlparse(resolved_url).path).name or 'download'
+
+    if load_from_drive and drive_fp:
+        existing = drive_fp / name
+        target = fp / name
+        if existing.exists():
+            _safe_link_or_copy(existing, target)
+            return {
+                'status': 'drive', 'url': resolved_url, 'target_dir': fp,
+                'download_dir': drive_fp, 'name': name, 'target': target,
+                'json': j, 'version_id': versionId, 'index': None
+            }
+        actual_fp = drive_fp
+    else:
+        actual_fp = fp
+
+    resolved_url = _resolve_authorized_url(resolved_url)
+    return {
+        'status': 'pending', 'url': resolved_url, 'target_dir': fp,
+        'download_dir': Path(actual_fp).expanduser(), 'name': name,
+        'json': j, 'version_id': versionId, 'is_fast': _is_fast_download(resolved_url),
+        'load_from_drive': load_from_drive, 'drive_dir': drive_fp, 'index': None
+    }
+
+_SIZE_UNITS = {
+    'B': 1,
+    'KiB': 1024, 'MiB': 1024 ** 2, 'GiB': 1024 ** 3, 'TiB': 1024 ** 4,
+    'KB': 1000, 'MB': 1000 ** 2, 'GB': 1000 ** 3, 'TB': 1000 ** 4,
+}
+
+_ARIA_STATUS = re.compile(
+    r'\[#(?P<gid>[0-9A-Fa-f]+)\s+'
+    r'(?P<done>[0-9.]+(?:KiB|MiB|GiB|TiB|KB|MB|GB|TB|B))/'
+    r'(?P<total>[0-9.]+(?:KiB|MiB|GiB|TiB|KB|MB|GB|TB|B))'
+    r'\((?P<pct>\d+)%\).*?'
+    r'CN:(?P<cn>\d+).*?'
+    r'DL:(?P<speed>[0-9.]+(?:KiB|MiB|GiB|TiB|KB|MB|GB|TB|B))'
+    r'(?:.*?ETA:(?P<eta>[0-9a-zA-Z]+))?'
+)
+
+def _size_to_bytes(value):
+    m = re.match(r'([0-9.]+)([A-Za-z]+)', str(value))
+    if not m:
+        return 0
+    return float(m.group(1)) * _SIZE_UNITS.get(m.group(2), 1)
+
+def _bytes_to_unit(value):
+    if value >= 1024 ** 3:
+        return f'{value / (1024 ** 3):.1f}GiB'
+    if value >= 1024 ** 2:
+        return f'{value / (1024 ** 2):.0f}MiB'
+    if value >= 1024:
+        return f'{value / 1024:.0f}KiB'
+    return f'{value:.0f}B'
+
+def _eta_to_seconds(value):
+    if not value:
+        return 0
+    total = 0
+    for n, unit in re.findall(r'(\d+)([hms])', value):
+        total += int(n) * {'h': 3600, 'm': 60, 's': 1}[unit]
+    return total
+
+def _seconds_to_eta(value):
+    value = int(max(0, value))
+    h, rem = divmod(value, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f'{h}h{m:02d}m'
+    if m:
+        return f'{m}m{s:02d}s'
+    return f'{s}s'
+
+def _parse_aria2_status(text):
+    out = []
+    for m in _ARIA_STATUS.finditer(text):
+        d = m.groupdict()
+        out.append({
+            'gid': d['gid'], 'done': d['done'], 'total': d['total'],
+            'pct': int(d['pct']), 'cn': d['cn'], 'speed': d['speed'],
+            'eta': d.get('eta') or '', 'done_bytes': _size_to_bytes(d['done']),
+            'total_bytes': _size_to_bytes(d['total']), 'speed_bytes': _size_to_bytes(d['speed']),
+            'eta_seconds': _eta_to_seconds(d.get('eta') or '')
+        })
+    return out
+
+def _render_parallel_snapshot(statuses, done_count, total):
+    active = list(statuses.values())[-10:]
+    if not active:
+        return
+
+    for s in active:
+        print(f"【#{s['gid']} {s['done']}/{s['total']}({s['pct']}%) CN:{s['cn']} DL:{s['speed']} ETA:{s['eta'] or '?'}】")
+
+    done_bytes = sum(s['done_bytes'] for s in statuses.values())
+    total_bytes = sum(s['total_bytes'] for s in statuses.values())
+    speed_bytes = sum(s['speed_bytes'] for s in statuses.values())
+    pct = int(done_bytes * 100 / total_bytes) if total_bytes else 0
+    eta_values = [s['eta_seconds'] for s in statuses.values() if s['eta_seconds']]
+    eta = _seconds_to_eta(max(eta_values)) if eta_values else '?'
+    print(f'【#Parallel {_bytes_to_unit(done_bytes)}/{_bytes_to_unit(total_bytes)}({pct}%) DL:{_bytes_to_unit(speed_bytes)}/s ETA:{eta} [{done_count}/{total}]】')
+
+def _write_aria2_input(items):
+    tmp = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.txt', delete=False)
+    try:
+        for item in items:
+            item['download_dir'].mkdir(parents=True, exist_ok=True)
+            tmp.write(f"{item['url']}\n")
+            tmp.write(f"  dir={item['download_dir']}\n")
+            tmp.write(f"  out={item['name']}\n")
+            for key, value in _aria_headers(item['url']).items():
+                tmp.write(f"  header={key}: {value}\n")
+        return tmp.name
+    finally:
+        tmp.close()
+
+def _aria2_download_many(items, max_workers=3):
+    if not items:
+        return []
+
+    input_file = _write_aria2_input(items)
+    cmd = [
+        'aria2c',
+        f'--input-file={input_file}',
+        '--allow-overwrite=true', '--console-log-level=error', '--stderr=true',
+        '-c', '-x16', '-s16', '-k1M', '-j', str(max(1, int(max_workers or 1)))
+    ]
+
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, bufsize=1)
+    buffer, statuses, last_render = '', {}, 0
+
+    try:
+        while True:
+            ch = p.stderr.read(1)
+            if ch == '' and p.poll() is not None:
+                break
+            if not ch:
+                continue
+
+            if ch not in '\r\n':
+                buffer += ch
+                continue
+
+            chunk, buffer = buffer, ''
+            parsed = _parse_aria2_status(chunk)
+            if parsed:
+                for status in parsed:
+                    statuses[status['gid']] = status
+                now = time.time()
+                if now - last_render >= 0.5:
+                    _render_parallel_snapshot(statuses, 0, len(items))
+                    last_render = now
+
+        if buffer:
+            for status in _parse_aria2_status(buffer):
+                statuses[status['gid']] = status
+        p.wait()
+    finally:
+        try:
+            Path(input_file).unlink()
+        except Exception:
+            pass
+
+    if p.returncode != 0:
+        raise RuntimeError('aria2c batch failed')
+
+    _render_parallel_snapshot(statuses, len(items), len(items))
+
+    results = []
+    for item in items:
+        saved = item['download_dir'] / item['name']
+        results.append(str(saved))
+        if item.get('json'):
+            civitai_infotags(item['json'], item['download_dir'], item['name'], item.get('version_id'))
+            threading.Thread(
+                target=civitai_preview,
+                args=(item['json'], item['download_dir'], item['name'], item.get('version_id')),
+                daemon=True
+            ).start()
+        if item.get('load_from_drive') and item.get('drive_dir') and saved.exists():
+            target = item['target_dir'] / item['name']
+            if saved.resolve() != target.resolve():
+                _safe_link_or_copy(saved, target)
+
+    return results
+
 def _aria2_download_to_dir(url, fp, fn=None):
     url, j, versionId, fn = get_url(url, fn)
     if not url:
@@ -309,21 +535,58 @@ def download_many(items, target_dir=None, parallel=False, max_workers=3, load_fr
         return results
 
     print(f'【#Parallel starting {total} item(s), workers:{max_workers}】')
-    with ThreadPoolExecutor(max_workers=min(max_workers, total)) as executor:
-        futures = {
-            executor.submit(_download_batch_item, item, target_dir, load_from_drive, drive_dir): (index, item)
-            for index, item in enumerate(clean, 1)
-        }
-        for done_count, future in enumerate(as_completed(futures), 1):
-            index, item = futures[future]
-            try:
-                result = future.result()
-                print(f'  [{done_count:>2}/{total}] ✓ {index}')
-                results.append(result)
-            except Exception as e:
-                print(f'  [{done_count:>2}/{total}] ✗ {index}: {e}')
+
+    prepared, fallback = [], []
+    for index, item in enumerate(clean, 1):
+        try:
+            meta = _prepare_download_item(item, target_dir, load_from_drive, drive_dir)
+            if not meta:
+                continue
+            meta['index'] = index
+            if meta.get('status') == 'drive':
+                print(f"  [{index:>2}/{total}] ✓ {meta['name']} [Drive]")
+                results.append(str(meta['target']))
+            elif meta.get('is_fast'):
+                prepared.append(meta)
+            else:
+                fallback.append((index, item))
+        except Exception as e:
+            print(f'  [{index:>2}/{total}] ✗ prepare failed: {e}')
+
+    if prepared:
+        try:
+            results.extend(_aria2_download_many(prepared, max_workers=max_workers))
+            for item in prepared:
+                print(f"  [{item['index']:>2}/{total}] ✓ {item['name']}")
+        except Exception as e:
+            print(f'  batch aria2 failed: {e}')
+            print('  falling back to threaded downloads')
+            fallback.extend((item['index'], clean[item['index'] - 1]) for item in prepared)
+
+    if fallback:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(fallback))) as executor:
+            futures = {
+                executor.submit(_download_batch_item, item, target_dir, load_from_drive, drive_dir): (index, item)
+                for index, item in fallback
+            }
+            for future in as_completed(futures):
+                index, item = futures[future]
+                try:
+                    result = future.result()
+                    print(f'  [{index:>2}/{total}] ✓ {Path(str(result)).name}')
+                    results.append(result)
+                except Exception as e:
+                    print(f'  [{index:>2}/{total}] ✗ {e}')
+
     print(f'【#Parallel complete {len(results)}/{total} item(s)】')
     return results
+
+def parallel_batch_download(queue, max_workers=3):
+    items = []
+    for url, target_dir, filename in queue:
+        item = f'{url} {target_dir}' + (f' {filename}' if filename else '')
+        items.append(item)
+    return download_many(items, parallel=True, max_workers=max_workers)
 
 def resizer(b, size=512):
     from PIL import Image
